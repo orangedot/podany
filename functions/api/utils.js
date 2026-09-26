@@ -113,7 +113,13 @@ export function isValidExternalUrl(urlString) {
     }
     if (host.startsWith('[') && host.endsWith(']')) {
       const ipv6 = host.slice(1, -1).toLowerCase();
-      if (ipv6 === '::1' || ipv6 === '::' || ipv6.startsWith('fe80:') || ipv6.startsWith('fc') || ipv6.startsWith('fd')) {
+      if (ipv6 === '::1' || 
+        ipv6 === '::' || 
+        ipv6.startsWith('fe80:') || 
+        ipv6.startsWith('fc') || 
+        ipv6.startsWith('fd')) || 
+        ipv6.includes('::ffff:')
+      {
         return false;
       }
     }

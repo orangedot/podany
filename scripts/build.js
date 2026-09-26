@@ -7,6 +7,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
 const publicDir = path.join(rootDir, 'public');
 const distDir = path.join(publicDir, 'dist');
+const srcDir = path.join(rootDir, 'src');
 
 console.log('📦 Starting Anypod production build...');
 
@@ -14,10 +15,15 @@ if (!fs.existsSync(distDir)) {
   fs.mkdirSync(distDir, { recursive: true });
 }
 
-// 1. Bundle and minify JS
+// 1. Bundle and minify JS from modular src/main.js
+// Falls back to public/app.js if src/main.js does not exist yet
+const jsEntry = fs.existsSync(path.join(srcDir, 'main.js'))
+  ? path.join(srcDir, 'main.js')
+  : path.join(publicDir, 'app.js');
+
 await esbuild.build({
-  entryPoints: [path.join(publicDir, 'app.js')],
-  bundle: false,
+  entryPoints: [jsEntry],
+  bundle: true,          // MUST be true to bundle all imports from src/
   minify: true,
   sourcemap: true,
   target: ['es2022'],
@@ -40,7 +46,7 @@ const rawHtml = fs.readFileSync(path.join(publicDir, 'index.html'), 'utf-8');
 const v = Date.now();
 const prodHtml = rawHtml
   .replace(/href="style\.css(\?[^"]*)?"/, `href="style.min.css?v=${v}"`)
-  .replace(/src="app\.js(\?[^"]*)?"/, `src="app.min.js?v=${v}"`);
+  .replace(/src="(app\.js|src\/main\.js|dist\/app\.min\.js)(\?[^"]*)?"/, `src="app.min.js?v=${v}"`);
 
 fs.writeFileSync(path.join(distDir, 'index.html'), prodHtml, 'utf-8');
 
@@ -63,7 +69,11 @@ if (fs.existsSync(publicScriptsDir)) {
   }
 }
 
-const originalJsSize = (fs.statSync(path.join(publicDir, 'app.js')).size / 1024).toFixed(1);
+// 6. Calculate sizes
+const originalJsPath = fs.existsSync(path.join(publicDir, 'app.js'))
+  ? path.join(publicDir, 'app.js')
+  : jsEntry;
+const originalJsSize = (fs.statSync(originalJsPath).size / 1024).toFixed(1);
 const minJsSize = (fs.statSync(path.join(distDir, 'app.min.js')).size / 1024).toFixed(1);
 const originalCssSize = (fs.statSync(path.join(publicDir, 'style.css')).size / 1024).toFixed(1);
 const minCssSize = (fs.statSync(path.join(distDir, 'style.min.css')).size / 1024).toFixed(1);

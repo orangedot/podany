@@ -18,27 +18,32 @@ let isAcceleratingSilence = false;
 
 /**
  * Initializes the live Web Audio graph connected to the HTMLMediaElement.
- * Must be called or resumed on the first user gesture.
+ * Guaranteed to attach the media element source only ONCE.
  */
 export function initLiveDspGraph() {
-  if (liveAudioCtx || !elements.audio) return;
+  if (liveAudioSource || !elements.audio) return;
+
   try {
     const AudioCtx = window.AudioContext || window.webkitAudioContext;
     if (!AudioCtx) return;
-    liveAudioCtx = new AudioCtx();
+    
+    if (!liveAudioCtx) {
+      liveAudioCtx = new AudioCtx();
+    }
 
-    // Synchronously resume if in user gesture
+    // Synchronously resume if within user gesture context
     if (liveAudioCtx.state === 'suspended') {
       liveAudioCtx.resume().catch(() => {});
     }
 
-    // Ensure CORS works; fallback to direct playback if it fails
-    elements.audio.crossOrigin = "anonymous";
+    // Allow CORS streaming headers
+    elements.audio.crossOrigin = 'anonymous';
+
     try {
       liveAudioSource = liveAudioCtx.createMediaElementSource(elements.audio);
     } catch (e) {
-      console.warn('[anypod] CORS media source error, bypassing Web Audio graph:', e);
-      liveAudioSource = null; // fallback: hardware output directly via element
+      console.warn('[anypod] CORS media source error, using direct hardware output:', e);
+      liveAudioSource = null;
       return;
     }
 
@@ -48,7 +53,7 @@ export function initLiveDspGraph() {
     liveAnalyser.fftSize = 512;
     liveTimeData = new Float32Array(liveAnalyser.fftSize);
 
-    // Voice boost parameters (studio spoken‑word)
+    // Voice boost compressor profile (spoken-word normalization)
     liveCompressor.threshold.setValueAtTime(-24, liveAudioCtx.currentTime);
     liveCompressor.knee.setValueAtTime(30, liveAudioCtx.currentTime);
     liveCompressor.ratio.setValueAtTime(12, liveAudioCtx.currentTime);
@@ -58,8 +63,18 @@ export function initLiveDspGraph() {
     updateDspRouting();
     startSilenceDetectionLoop();
   } catch (err) {
-    console.warn('[anypod] live audio DSP init error:', err);
+    console.warn('[anypod] Live audio DSP init error:', err);
   }
+}
+
+/**
+ * Safely disconnects a node without throwing DOMExceptions
+ */
+function safeDisconnect(node) {
+  if (!node) return;
+  try {
+    node.disconnect();
+  } catch (_) {}
 }
 
 /**
@@ -67,17 +82,18 @@ export function initLiveDspGraph() {
  */
 export function updateDspRouting() {
   if (!liveAudioCtx || !liveAudioSource) return;
+
   try {
     if (liveAudioCtx.state === 'suspended') {
       liveAudioCtx.resume().catch(() => {});
     }
 
-    try { liveAudioSource.disconnect(); } catch (_) {}
-    try { liveCompressor.disconnect(); } catch (_) {}
-    try { liveGainNode.disconnect(); } catch (_) {}
-    try { liveAnalyser.disconnect(); } catch (_) {}
+    safeDisconnect(liveAudioSource);
+    safeDisconnect(liveCompressor);
+    safeDisconnect(liveGainNode);
+    safeDisconnect(liveAnalyser);
 
-    const isBoost = !!state.experimentalSettings.enableVolumeBoost;
+    const isBoost = !!(state.experimentalSettings && state.experimentalSettings.enableVolumeBoost);
 
     if (isBoost) {
       liveGainNode.gain.setValueAtTime(1.35, liveAudioCtx.currentTime);
@@ -87,6 +103,7 @@ export function updateDspRouting() {
     } else {
       liveAudioSource.connect(liveAnalyser);
     }
+
     liveAnalyser.connect(liveAudioCtx.destination);
   } catch (err) {
     console.warn('[anypod] DSP routing error:', err);
@@ -98,6 +115,7 @@ export function updateDspRouting() {
  * @param {boolean} enabled
  */
 export function setVoiceBoost(enabled) {
+  if (!state.experimentalSettings) state.experimentalSettings = {};
   state.experimentalSettings.enableVolumeBoost = !!enabled;
   updateDspRouting();
 }
@@ -116,9 +134,13 @@ export function resumeLiveDsp() {
  */
 export function startSilenceDetectionLoop() {
   if (liveDspInterval) clearInterval(liveDspInterval);
+
   liveDspInterval = setInterval(() => {
     // Battery & background throttle: skip analysis if tab is inactive or not playing
-    if (!state.isTabActive || state.playbackStatus !== 'playing' || state.activeEngine !== 'audio') {
+    const isTabActive = state.isTabActive !== false;
+    const isAudioPlaying = state.playbackStatus === 'playing' && state.activeEngine === 'audio';
+
+    if (!isTabActive || !isAudioPlaying) {
       if (isAcceleratingSilence && elements.audio) {
         elements.audio.playbackRate = state.playbackSpeed || 1.0;
         isAcceleratingSilence = false;
@@ -126,7 +148,8 @@ export function startSilenceDetectionLoop() {
       return;
     }
 
-    if (!state.experimentalSettings.enableSilenceSkip || !liveAnalyser || !liveTimeData) {
+    const isSkipEnabled = !!(state.experimentalSettings && state.experimentalSettings.enableSilenceSkip);
+    if (!isSkipEnabled || !liveAnalyser || !liveTimeData) {
       if (isAcceleratingSilence && elements.audio) {
         elements.audio.playbackRate = state.playbackSpeed || 1.0;
         isAcceleratingSilence = false;
@@ -141,7 +164,7 @@ export function startSilenceDetectionLoop() {
     }
     const rms = Math.sqrt(sum / liveTimeData.length);
 
-    // Silence detection: RMS < 0.015 for >350ms
+    // Silence detection: RMS < 0.015 for >= 350ms
     if (rms < 0.015) {
       silenceDurationMs += 100;
       if (silenceDurationMs >= 350) {

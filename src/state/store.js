@@ -43,9 +43,9 @@ export const state = {
   },
   experimentalSettings: {
     enableVisualizer: true,
-    enableAudioClassifier: true,
+    enableAudioClassifier: false,
     autoSkipSpeech: false,
-    enableTranscript: true,
+    enableTranscript: false,
     enableVolumeBoost: false,
     enableSilenceSkip: false
   },
